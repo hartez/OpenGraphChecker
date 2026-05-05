@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "OpenGraphChecker": {
+      "commandName": "Project",
+      "commandLineArgs": "-s https://www.codewise-llc.com/sitemap.xml"
+    }
+  }
+}
