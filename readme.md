@@ -77,3 +77,8 @@ If specified, the OGC will report progress as it checks URLs.
 
 Shows verbose output if specified. Otherwise, only the final report will be shown.
 
+# Credits
+
+Command line parsing via the amazing [Command Line Parser Library](https://github.com/commandlineparser/commandline)
+
+Open Graph parsing via [OpenGraph-Net](https://github.com/ghorsey/OpenGraph-Net)
