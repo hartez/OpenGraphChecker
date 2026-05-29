@@ -42,6 +42,11 @@ internal partial class Program
 		[Option('v', "verbose", Required = false, HelpText = "Set output to verbose messages")]
 		public bool Verbose { get; set; }
 
+		[Option('i', "imagevalidation", Required = false, HelpText = "Validate that OG images exist")]
+		public bool ValidateImages { get; set; }
+
+		public bool UseLocalBase => !string.IsNullOrEmpty(LocalBaseUrl);
+
 		public IEnumerable<KeyValuePair<string, string>> RequiredElements => Elements.Select(e =>
 		{
 			var index = e.IndexOf(':');

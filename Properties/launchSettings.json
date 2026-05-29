@@ -2,7 +2,7 @@
   "profiles": {
     "OpenGraphChecker": {
       "commandName": "Project",
-      "commandLineArgs": "-s https://www.codewise-llc.com/sitemap.xml"
+      "commandLineArgs": "-s http://localhost:5080/sitemap.xml -b http://localhost:5080/ -o article -r article:author -v -p -i"
     }
   }
 }

@@ -1,11 +1,14 @@
-﻿using OpenGraphNet;
+﻿using CommandLine;
+using OpenGraphNet;
 using OpenGraphNet.Metadata;
 using OpenGraphNet.Namespaces;
 using System.Xml;
-using CommandLine;
 
 internal partial class Program
 {
+	static readonly HttpClient _httpClient = new();
+	static Dictionary<Uri, bool> _knownImageStatus = [];
+
 	private static async Task Main(string[] args)
 	{
 		var result = Parser.Default.ParseArguments<Options>(args);
@@ -42,21 +45,27 @@ internal partial class Program
 
 		for (var i = 0; i < locations.Count; i++)
 		{
-			var url = locations[i];
-			var targetUrl = string.IsNullOrEmpty(options.LocalBaseUrl)
-				? url
-				: UseLocalBaseUrl(url, options.LocalBaseUrl);
+			var url = new Uri(locations[i]);
+
+			var target = AdjustTarget(url, options);
 
 			if (options.Progress)
 			{
-				Console.WriteLine($"{i+1}/{locations.Count} Checking {targetUrl}");
+				Console.WriteLine($"{i + 1}/{locations.Count} Checking {target}");
 			}
 
-			var issues = await FindIssues(targetUrl, result.Value);
+			var issues = await FindIssues(target, result.Value);
 			issueList.AddRange(issues);
 		}
 
 		OutputIssues(issueList);
+	}
+
+	static Uri AdjustTarget(Uri target, Options options)
+	{
+		return options.UseLocalBase
+					? UseLocalBase(target, new Uri(options.LocalBaseUrl))
+					: target;
 	}
 
 	static void EnsureNamespacesRegistered(IEnumerable<string> namespaces)
@@ -73,7 +82,8 @@ internal partial class Program
 		}
 	}
 
-	static void EnsureRequiredElements(IEnumerable<KeyValuePair<string, string>> elements) {
+	static void EnsureRequiredElements(IEnumerable<KeyValuePair<string, string>> elements)
+	{
 
 		var registered = NamespaceRegistry.Instance.Namespaces;
 
@@ -81,7 +91,8 @@ internal partial class Program
 		{
 			var ns = element.Key;
 
-			if (!registered.ContainsKey(ns)) {
+			if (!registered.ContainsKey(ns))
+			{
 				NamespaceRegistry.Instance.AddNamespace(
 					prefix: ns,
 					schemaUri: "");
@@ -91,30 +102,30 @@ internal partial class Program
 		}
 	}
 
-	static string UseLocalBaseUrl(string url, string localBaseUrl) 
+	static Uri UseLocalBase(Uri uri, Uri localBaseUri)
 	{
-		var original = new Uri(url);
+		var original = uri;
 
-		return url.Replace(original.GetLeftPart(UriPartial.Authority), localBaseUrl);
+		return new Uri(uri.ToString().Replace(original.GetLeftPart(UriPartial.Authority), localBaseUri.ToString()));
 	}
 
-	static async Task<List<String>> FindIssues(string url, Options options)
+	static async Task<List<String>> FindIssues(Uri uri, Options options)
 	{
 		var issueList = new List<string>();
 
 		// Not validating the spec because it will immediately throw an error if something is missing; we want to aggregate
 		// _all_ of the errors in a report
-		OpenGraph graph = await OpenGraph.ParseUrlAsync(url, validateSpecification: false);
+		OpenGraph graph = await OpenGraph.ParseUrlAsync(uri, validateSpecification: false);
 
 		foreach (var @namespace in options.RequiredNamespaces)
 		{
 			if (!graph.Namespaces.TryGetValue(@namespace, out OpenGraphNamespace? graphNamespace))
 			{
-				issueList.Add($"{url} has no metadata for {@namespace}");
+				issueList.Add($"{uri} has no metadata for {@namespace}");
 				continue;
 			}
 
-			issueList = [.. issueList, .. ValidateRequiredElements(url, graph, graphNamespace)];
+			issueList = [.. issueList, .. ValidateRequiredElements(uri, graph, graphNamespace)];
 		}
 
 		foreach (var @namespace in options.OptionalNamespaces)
@@ -124,7 +135,7 @@ internal partial class Program
 				continue;
 			}
 
-			issueList = [.. issueList, .. ValidateRequiredElements(url, graph, graphNamespace)];
+			issueList = [.. issueList, .. ValidateRequiredElements(uri, graph, graphNamespace)];
 		}
 
 		var unexpected = graph.Namespaces
@@ -134,10 +145,46 @@ internal partial class Program
 		{
 			// This will find unexpected normal OG stuff (like a game: tag when you don't ask about them),
 			// but won't see misspelled or fat-fingered tags (like if you mean "profile:" and type "porfile:").
-			issueList.Add($"Found unexpected namespace {@namespace} in {url}");
+			issueList.Add($"Found unexpected namespace {@namespace} in {uri}");
+		}
+
+		if (options.ValidateImages && graph.Image != null)
+		{
+			var target = AdjustTarget(graph.Image, options);
+
+			if (!await ImageExists(target, options.Verbose))
+			{
+				issueList.Add($"Image {target} referenced by {uri} does not exist.");
+			}
 		}
 
 		return issueList;
+	}
+
+	static async Task<bool> ImageExists(Uri imageUri, bool verbose)
+	{
+		if (_knownImageStatus.TryGetValue(imageUri, out bool value))
+		{
+			return value;
+		}
+
+		if (verbose)
+		{
+			Console.WriteLine($"Verifying existence of {imageUri}");
+		}
+
+		// Check for image
+		var status = await ValidateImageAsync(imageUri);
+
+		if (verbose)
+		{
+			Console.WriteLine($"{imageUri} exists");
+		}
+
+		// Record it so we don't have to check the same URI over and over
+		_knownImageStatus[imageUri] = status;
+
+		return status;
 	}
 
 	static void OutputIssues(List<String> issues)
@@ -172,7 +219,7 @@ internal partial class Program
 		return [.. locations.Select(x => x.InnerText)];
 	}
 
-	static IEnumerable<string> ValidateRequiredElements(string url, OpenGraph graph, OpenGraphNamespace @namespace)
+	static IEnumerable<string> ValidateRequiredElements(Uri uri, OpenGraph graph, OpenGraphNamespace @namespace)
 	{
 		var prefix = @namespace.Prefix;
 		var required = NamespaceRegistry.Instance.Namespaces[prefix].RequiredElements;
@@ -195,7 +242,7 @@ internal partial class Program
 			{
 				if (string.IsNullOrEmpty(graph.Metadata[key].Value()))
 				{
-					yield return $"{url} is missing required value for key {key}";
+					yield return $"{uri} is missing required value for key {key}";
 					continue;
 				}
 			}
@@ -204,25 +251,32 @@ internal partial class Program
 				var metadata = graph.Metadata[key];
 				if (metadata.Count == 0)
 				{
-					yield return $"{url} is missing required property {targetProperty} for key {key}";
+					yield return $"{uri} is missing required property {targetProperty} for key {key}";
 					continue;
 				}
 
 				var metadataProperties = metadata[0].Properties;
 				if (metadataProperties.Count == 0)
 				{
-					yield return $"{url} is missing required property {targetProperty} for key {key}";
+					yield return $"{uri} is missing required property {targetProperty} for key {key}";
 					continue;
 				}
 				else
 				{
 					if (!metadataProperties.ContainsKey(targetProperty))
 					{
-						yield return $"{url} is missing required property {targetProperty} for key {key}";
+						yield return $"{uri} is missing required property {targetProperty} for key {key}";
 						continue;
 					}
 				}
 			}
 		}
+	}
+
+	static async Task<bool> ValidateImageAsync(Uri imageUri)
+	{
+		using var response = await _httpClient.GetAsync(imageUri);
+		var mediaType = response.Content.Headers.ContentType?.MediaType ?? "";
+		return mediaType.StartsWith("image/");
 	}
 }
